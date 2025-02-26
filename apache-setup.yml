@@ -27,6 +27,7 @@
         src: templates/index.html.j2
         dest: /var/www/html/index.html
         force: yes
+        mode: '0644'
 
     - name: Open the firewalld http port
       firewalld:
