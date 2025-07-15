@@ -1,0 +1,67 @@
+---
+- name: Configure a simple web server and allow access to internal networks
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install software
+      ansible.builtin.dnf:
+        name:
+          - httpd
+          - firewalld
+        state: latest
+
+    - name: Set local_network variable
+      vars:
+        ip_netmask: "{{ ansible_facts['default_ipv4']['network'] }}/{{ ansible_facts['default_ipv4']['netmask'] }}"
+      set_fact:
+        local_network: "{{ ip_netmask | ansible.utils.ipaddr('net') }}"
+        cacheable: true
+
+    - name: Create a simple webpage
+      template:
+        src: templates/index.html.j2
+        dest: /var/www/html/index.html
+
+    - name: Start and enable services
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - httpd
+        - firewalld
+
+    - name: Revert to default firewalld configuration for the public zone
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/firewalld/zones/public.xml
+        - /etc/firewalld/zones/public.xml.old
+      loop_control:
+        label: Removing the '{{ item }}' file.
+      register: remove_public_files
+
+    - name: Restart firewalld
+      service:
+        name: firewalld
+        state: restarted
+      when: remove_public_files['changed'] | bool == True
+
+    - name: Open ports for local network
+      vars:
+        ports_protocols:
+          - port: 80
+            protocol: tcp
+        additional_networks: []
+        all_networks: "{{ ([ local_network, additional_networks ]) | flatten }}"
+      ansible.posix.firewalld:
+        zone: public
+        immediate: true
+        permanent: true
+        state: enabled
+        rich_rule: 'rule family="ipv4" source address="{{ item[1] }}" port protocol="{{ item.0.protocol }}" port="{{ item.0.port }}" accept'
+      with_nested:
+        - "{{ ports_protocols }}"
+        - "{{ all_networks }}"
